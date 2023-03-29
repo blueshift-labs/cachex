@@ -76,7 +76,7 @@ defmodule Cachex do
             refs = Map.put(refs, key, {task.ref, [], System.monotonic_time()})
             {:noreply, %{state | refs: refs}}
 
-          {ref, _froms} ->
+          {ref, _froms, _ts} ->
             {:noreply, state}
         end
       end
