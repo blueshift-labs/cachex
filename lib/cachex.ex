@@ -31,7 +31,7 @@ defmodule Cachex do
 
         now = System.monotonic_time(:millisecond)
 
-        case :ets.lookup(@cache, key) do
+        case :ets.lookup(cache_table(), key) do
           [{^key, {value, ts}}] when now <= ts + expiry ->
             {:ok, value}
 
@@ -44,11 +44,15 @@ defmodule Cachex do
         end
       end
 
+      defp cache_table() do
+        String.to_atom("cachex_#{@cache}")
+      end
+
       @impl true
       def init(opts) do
         Process.flag(:trap_exit, true)
 
-        :ets.new(@cache, [
+        :ets.new(cache_table(), [
           :named_table,
           :set,
           :public,
@@ -69,10 +73,10 @@ defmodule Cachex do
 
             task = Task.Supervisor.async_nolink(sup, fn -> fetch(key, opts) end)
 
-            refs = Map.put(refs, key, {task.ref, []})
+            refs = Map.put(refs, key, {task.ref, [], System.monotonic_time()})
             {:noreply, %{state | refs: refs}}
 
-          {ref, _froms} ->
+          {ref, _froms, _ts} ->
             {:noreply, state}
         end
       end
@@ -85,7 +89,7 @@ defmodule Cachex do
           ) do
         now = System.monotonic_time(:millisecond)
 
-        case {:ets.lookup(@cache, key), Map.get(refs, key)} do
+        case {:ets.lookup(cache_table(), key), Map.get(refs, key)} do
           {[{^key, {value, ts}}], _ref} when now <= ts + expiry ->
             {:reply, {:ok, value}, state}
 
@@ -94,7 +98,7 @@ defmodule Cachex do
 
             task = Task.Supervisor.async_nolink(sup, fn -> fetch(key, opts) end)
 
-            refs = Map.put(refs, key, {task.ref, []})
+            refs = Map.put(refs, key, {task.ref, [], System.monotonic_time()})
             {:reply, {:ok, value}, %{state | refs: refs}}
 
           {[{^key, {value, _ts}}], _ref} ->
@@ -105,11 +109,11 @@ defmodule Cachex do
 
             task = Task.Supervisor.async_nolink(sup, fn -> fetch(key, opts) end)
 
-            refs = Map.put(refs, key, {task.ref, [from]})
+            refs = Map.put(refs, key, {task.ref, [from], System.monotonic_time()})
             {:noreply, %{state | refs: refs}}
 
-          {[], {ref, froms}} ->
-            refs = Map.put(refs, key, {ref, [from | froms]})
+          {[], {ref, froms, ts}} ->
+            refs = Map.put(refs, key, {ref, [from | froms], ts})
             {:noreply, %{state | refs: refs}}
         end
       end
@@ -118,10 +122,16 @@ defmodule Cachex do
       def handle_info({ref, {:ok, value}}, %{refs: refs} = state) do
         Process.demonitor(ref, [:flush])
 
-        {[{key, {_ref, froms}}], refs} =
-          Enum.split_with(refs, &match?({_key, {^ref, _froms}}, &1))
+        {[{key, {_ref, froms, ts}}], refs} =
+          Enum.split_with(refs, &match?({_key, {^ref, _froms, _ts}}, &1))
 
-        :ets.insert(@cache, {key, {value, System.monotonic_time(:millisecond)}})
+        :telemetry.execute(
+          [:cachex, :fetch, :success],
+          %{count: 1, duration: System.monotonic_time() - ts},
+          %{cache: @cache, key: key}
+        )
+
+        :ets.insert(cache_table(), {key, {value, System.monotonic_time(:millisecond)}})
 
         Enum.each(froms, &GenServer.reply(&1, {:ok, value}))
 
@@ -131,8 +141,14 @@ defmodule Cachex do
       def handle_info({ref, {:error, err}}, %{refs: refs} = state) do
         Process.demonitor(ref, [:flush])
 
-        {[{_key, {_ref, froms}}], refs} =
-          Enum.split_with(refs, &match?({_key, {^ref, _froms}}, &1))
+        {[{key, {_ref, froms, ts}}], refs} =
+          Enum.split_with(refs, &match?({_key, {^ref, _froms, _ts}}, &1))
+
+        :telemetry.execute(
+          [:cachex, :fetch, :error],
+          %{count: 1, duration: System.monotonic_time() - ts},
+          %{cache: @cache, key: key}
+        )
 
         Enum.each(froms, &GenServer.reply(&1, {:error, err}))
 
@@ -140,8 +156,14 @@ defmodule Cachex do
       end
 
       def handle_info({:DOWN, ref, :process, _pid, reason}, %{refs: refs} = state) do
-        {[{_key, {_ref, froms}}], refs} =
-          Enum.split_with(refs, &match?({_key, {^ref, _froms}}, &1))
+        {[{key, {_ref, froms, ts}}], refs} =
+          Enum.split_with(refs, &match?({_key, {^ref, _froms, _ts}}, &1))
+
+        :telemetry.execute(
+          [:cachex, :fetch, :error],
+          %{count: 1, duration: System.monotonic_time() - ts},
+          %{cache: @cache, key: key}
+        )
 
         Enum.each(froms, &GenServer.reply(&1, {:error, reason}))
 
@@ -151,7 +173,7 @@ defmodule Cachex do
       @impl true
       def terminate(_reason, state) do
         IO.inspect("hellow")
-        :ets.delete(@cache)
+        :ets.delete(cache_table())
 
         state
       end

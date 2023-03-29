@@ -18,6 +18,8 @@ defmodule Cachex.MixProject do
   end
 
   defp deps do
-    []
+    [
+      {:telemetry, "~> 1.1"}
+    ]
   end
 end
