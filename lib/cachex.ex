@@ -172,7 +172,6 @@ defmodule Cachex do
 
       @impl true
       def terminate(_reason, state) do
-        IO.inspect("hellow")
         :ets.delete(cache_table())
 
         state
