@@ -25,21 +25,31 @@ defmodule Cachex do
       end
 
       def get(key, params, opts) do
-        {timeout, opts} = Keyword.pop(opts, :timeout, @timeout)
-        {expiry, opts} = Keyword.pop(opts, :expiry, @expiry)
+        if Keyword.get(opts, :force?, false) do
+          force_get(key, params, opts)
+        else
+          {timeout, opts} = Keyword.pop(opts, :timeout, @timeout)
+          {expiry, opts} = Keyword.pop(opts, :expiry, @expiry)
 
-        now = System.monotonic_time(:millisecond)
+          now = System.monotonic_time(:millisecond)
 
-        case :ets.lookup(__MODULE__, {key, params}) do
-          [{_, {value, ts}}] when now <= ts + expiry ->
-            {:ok, value}
+          case :ets.lookup(__MODULE__, {key, params}) do
+            [{_, {value, ts}}] when now <= ts + expiry ->
+              {:ok, value}
 
-          [{_, {value, _ts}}] ->
-            GenServer.cast(__MODULE__, {:fetch, key, params, opts})
-            {:ok, value}
+            [{_, {value, _ts}}] ->
+              GenServer.cast(__MODULE__, {:fetch, key, params, opts})
+              {:ok, value}
 
-          [] ->
-            GenServer.call(__MODULE__, {:fetch, key, params, opts, expiry}, timeout)
+            [] ->
+              GenServer.call(__MODULE__, {:fetch, key, params, opts, expiry}, timeout)
+          end
+        end
+      end
+
+      defp force_get(key, params, opts) do
+        with {:ok, value} <- fetch(key, params, opts) do
+          :ets.insert(__MODULE__, {{key, params}, {value, System.monotonic_time(:millisecond)}})
         end
       end
 
