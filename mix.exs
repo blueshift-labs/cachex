@@ -19,6 +19,10 @@ defmodule Cachex.MixProject do
 
   defp deps do
     [
+      {:eredis_cluster,
+       git: "https://github.com/blueshift-labs/eredis_cluster.git",
+       tag: "bsft-0.9.0",
+       optional: true},
       {:telemetry, "~> 1.1"}
     ]
   end
