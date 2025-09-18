@@ -48,8 +48,13 @@ defmodule Cachex.ETS do
       end
 
       defp force_get(key, params, opts) do
-        with {:ok, value} <- fetch(key, params, opts) do
-          :ets.insert(__MODULE__, {{key, params}, {value, System.monotonic_time(:millisecond)}})
+        case fetch(key, params, opts) do
+          {:ok, value} ->
+            :ets.insert(__MODULE__, {{key, params}, {value, System.monotonic_time(:millisecond)}})
+            {:ok, value}
+
+          {:error, reason} ->
+            {:error, reason}
         end
       end
 
